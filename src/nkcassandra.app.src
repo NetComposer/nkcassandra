@@ -1,0 +1,9 @@
+{application, nkcassandra, [
+    {description, "NkCASSANDRA Plugin"},
+    {vsn, "develop"},
+    {modules, []},
+    {registered, []},
+    {mod, {nkcassandra_app, []}},
+    {applications, [nkservice, cqerl]},
+    {env, []}
+]}.
