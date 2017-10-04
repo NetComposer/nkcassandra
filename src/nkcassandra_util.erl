@@ -22,3 +22,15 @@
 
 -module(nkcassandra_util).
 -author('Carlos Gonzalez <carlosj.gf@gmail.com>').
+-export([create_keyspace/2]).
+
+%% @doc
+create_keyspace(Client, Name) ->
+    nkcassandra:query(Client,
+        list_to_binary([
+            "CREATE KEYSPACE ",
+            nklib_util:to_binary(Name),
+            " WITH replication = {'class':'SimpleStrategy', 'replication_factor' : 1};"
+        ])).
+
+
