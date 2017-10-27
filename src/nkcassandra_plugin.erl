@@ -20,7 +20,7 @@
 
 %% @doc NkCASSANDRA callbacks
 
--module(nkcassandra_callbacks).
+-module(nkcassandra_plugin).
 -author('Carlos Gonzalez <carlosj.gf@gmail.com>').
 
 -export([plugin_deps/0, plugin_syntax/0, plugin_config/2, plugin_start/2]).
@@ -28,21 +28,6 @@
 -include("nkcassandra.hrl").
 -include_lib("nkservice/include/nkservice.hrl").
 -include_lib("brod/include/brod.hrl").
-
-
-
-%% ===================================================================
-%% Types
-%% ===================================================================
-
-% -type continue() :: continue | {continue, list()}.
-
-
-
-
-%% ===================================================================
-%% Offered callbacks
-%% ===================================================================
 
 
 %% ===================================================================
