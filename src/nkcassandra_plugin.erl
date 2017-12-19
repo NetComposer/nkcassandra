@@ -23,7 +23,7 @@
 -module(nkcassandra_plugin).
 -author('Carlos Gonzalez <carlosj.gf@gmail.com>').
 
--export([plugin_deps/0, plugin_syntax/0, plugin_config/2, plugin_start/2]).
+-export([plugin_deps/0, plugin_syntax/0, plugin_config/2, plugin_start/2, plugin_stop/2]).
 
 -include("nkcassandra.hrl").
 -include_lib("nkservice/include/nkservice.hrl").
@@ -37,28 +37,31 @@
 %% ===================================================================
 
 
+%% @doc
 plugin_deps() ->
     [].
 
 
+%% @doc
 plugin_syntax() ->
 	#{
 	    nkcassandra =>
             {list, #{
-                cluster => binary,
+                id => new_atom,
                 nodes => {list, #{
                     host => host,
                     port => {integer, 1, 65535},
                     '__defaults' => #{host=><<"127.0.0.1">>, port=>9042}
                 }},
                 keyspace => binary,
-                '__mandatory' => [cluster, nodes]
+                '__mandatory' => [id, nodes]
            }}
 }.
 
 
+%% @doc
 plugin_config(#{nkcassandra:=List}=Config, #{id:=SrvId}) ->
-    case parse_clients(SrvId, List, #{}) of
+    case parse_clusters(SrvId, List, #{}) of
         {ok, Clusters} ->
             {ok, Config#{nkcassandra_clusters=>Clusters}};
         {error, Error} ->
@@ -69,6 +72,7 @@ plugin_config(Config, _Service) ->
     {ok, Config}.
 
 
+%% @doc
 plugin_start(#{nkcassandra_clusters:=Clients}=Config, _Service) ->
     case start_clusters(maps:to_list(Clients)) of
         ok ->
@@ -81,18 +85,27 @@ plugin_start(Config, _Service) ->
     {ok, Config}.
 
 
+%% @doc
+plugin_stop(#{nkcassandra_clusters:=_Clients}=Config, _Service) ->
+    {ok, Config};
+
+plugin_stop(Config, _Service) ->
+    {ok, Config}.
+
+
+
+
 
 %% ===================================================================
 %% Util
 %% ===================================================================
 
 %% @private
-parse_clients(_SrvId, [], Acc) ->
+parse_clusters(_SrvId, [], Acc) ->
     {ok, Acc};
 
-parse_clients(SrvId, [#{cluster:=Cluster, nodes:=Nodes}=Map|Rest], Acc) ->
-    Cluster2 = binary_to_atom(Cluster, utf8),
-    case maps:is_key(Cluster, Acc) of
+parse_clusters(SrvId, [#{id:=Id, nodes:=Nodes} = Map|Rest], Acc) ->
+    case maps:is_key(Id, Acc) of
         false ->
             Nodes2 = [{Host, Port} || #{host:=Host, port:=Port} <- Nodes],
             Opts = case Map of
@@ -101,22 +114,31 @@ parse_clients(SrvId, [#{cluster:=Cluster, nodes:=Nodes}=Map|Rest], Acc) ->
                 _ ->
                     []
             end,
-            parse_clients(SrvId, Rest, Acc#{Cluster2=>{Nodes2, Opts}});
+            parse_clusters(SrvId, Rest, Acc#{Id=>{Nodes2, Opts}});
         true ->
-            {error, duplicated_cluster}
+            {error, duplicated_id}
     end.
 
 
 
 %% @private
+%% This operation only add the nodes to a cluster id in cqerl_cluster
+%% There is currently no way to remove nodes,
+%% we can do exit(pid(cqerl_cluster), kill) and add nodes again, but we will remove from all instances
+%% of the service
+%% In any case it seems to be used only for clients when start
+%% Monitoring and everything is done at clients
+%%
+%% If we change the nodes, even if we restart the service, old nodes will remain!
+%% Even if we stop the service, the clients will remain connected
+
 start_clusters([]) ->
     ok;
 
-start_clusters([{Cluster, {Hosts, Opts}}|Rest]) ->
-    lager:notice("cqerl_cluster:add_nodes(~p,~p,~p)", [Cluster, Hosts, Opts]),
-    case cqerl_cluster:add_nodes(Cluster, Hosts, Opts) of
+start_clusters([{Id, {Hosts, Opts}}|Rest]) ->
+    case cqerl_cluster:add_nodes(Id, Hosts, Opts) of
         ok ->
-            lager:notice("NkCassandra started cluster '~s' (~p, ~p)", [Cluster, Hosts, Opts]),
+            lager:notice("NkCassandra configured cluster '~s' (~p, ~p)", [Id, Hosts, Opts]),
             start_clusters(Rest);
         Other ->
             {error, {could_not_start_cqerl_cluster, Other}}

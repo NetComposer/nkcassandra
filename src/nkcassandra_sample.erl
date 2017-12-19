@@ -37,7 +37,7 @@ start() ->
         callback => ?MODULE,
         nkcassandra => [
             #{
-                cluster => cluster1,
+                id => cluster1,
                 nodes => [#{host=><<"localhost">>}]
                 %nodes => [#{host=><<"localhost">>}, #{host=>"1234"}, #{host=>"abc", port=>1234}],
                 %keyspace => keyspace1

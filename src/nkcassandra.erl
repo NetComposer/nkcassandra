@@ -43,7 +43,10 @@
 %% Types
 %% ===================================================================
 
-%% @doc
+%% @doc Generates a new client
+%% It selects a node randomly from the cluster, and select a client already connected if present
+%% Clients will remain even if we stop the service
+
 -spec get_client(cluster_id()) ->
     {ok, client()} | {error, term()}.
 
