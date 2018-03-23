@@ -18,16 +18,20 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc NkCASSANDRA callbacks
+%% @doc NkCASSANDRA plugun
 
 -module(nkcassandra_plugin).
 -author('Carlos Gonzalez <carlosj.gf@gmail.com>').
 
--export([plugin_deps/0, plugin_syntax/0, plugin_config/2, plugin_start/2, plugin_stop/2]).
+-export([plugin_deps/0, plugin_api/1, plugin_config/3, plugin_start/4, plugin_update/5]).
+-export([conn_resolve/3, conn_start/1, conn_stop/1]).
 
 -include("nkcassandra.hrl").
 -include_lib("nkservice/include/nkservice.hrl").
--include_lib("brod/include/brod.hrl").
+-include_lib("nkpacket/include/nkpacket.hrl").
+-include_lib("cqerl/include/cqerl.hrl").
+
+-define(LLOG(Type, Txt, Args),lager:Type("NkCASSANDRA "++Txt, Args)).
 
 
 %% ===================================================================
@@ -41,107 +45,166 @@
 plugin_deps() ->
     [].
 
-
 %% @doc
-plugin_syntax() ->
-	#{
-	    nkcassandra =>
-            {list, #{
-                id => new_atom,
-                nodes => {list, #{
-                    host => host,
-                    port => {integer, 1, 65535},
-                    '__defaults' => #{host=><<"127.0.0.1">>, port=>9042}
-                }},
-                keyspace => binary,
-                '__mandatory' => [id, nodes]
-           }}
-}.
+plugin_api(?PKG_CASSANDRA) ->
+    #{
+        luerl => #{
+            query => {nkservice_pgsql, luerl_query}
+        }
+    };
+
+plugin_api(_Class) ->
+    #{}.
 
 
 %% @doc
-plugin_config(#{nkcassandra:=List}=Config, #{id:=SrvId}) ->
-    case parse_clusters(SrvId, List, #{}) of
-        {ok, Clusters} ->
-            {ok, Config#{nkcassandra_clusters=>Clusters}};
+plugin_config(?PKG_CASSANDRA, #{config:=Config}=Spec, _Service) ->
+    Syntax = #{
+        targets => {list, #{
+            url => binary,
+            weight => {integer, 1, 1000},
+            '__mandatory' => [url]
+        }},
+        keyspace => binary,
+        debug => boolean,
+        resolveInterval => {integer, 0, none},
+        '__mandatory' => [targets]
+    },
+    case nklib_syntax:parse(Config, Syntax) of
+        {ok, Parsed, _} ->
+            {ok, Spec#{config:=Parsed}};
         {error, Error} ->
             {error, Error}
     end;
 
-plugin_config(Config, _Service) ->
-    {ok, Config}.
+plugin_config(_Class, _Package, _Service) ->
+    continue.
 
 
 %% @doc
-plugin_start(#{nkcassandra_clusters:=Clients}=Config, _Service) ->
-    case start_clusters(maps:to_list(Clients)) of
-        ok ->
-            {ok, Config};
-        {error, Error} ->
-            {error, Error}
+plugin_start(?PKG_CASSANDRA, #{id:=Id, config:=Config}, Pid, Service) ->
+    insert(Id, Config, Pid, Service);
+
+plugin_start(_Id, _Spec, _Pid, _Service) ->
+    continue.
+
+
+%% @doc
+%% Even if we are called only with modified config, we check if the spec is new
+plugin_update(?PKG_CASSANDRA, #{id:=Id, config:=NewConfig}, OldSpec, Pid, Service) ->
+    case OldSpec of
+        #{config:=NewConfig} ->
+            ok;
+        _ ->
+            insert(Id, NewConfig, Pid, Service)
     end;
 
-plugin_start(Config, _Service) ->
-    {ok, Config}.
-
-
-%% @doc
-plugin_stop(#{nkcassandra_clusters:=_Clients}=Config, _Service) ->
-    {ok, Config};
-
-plugin_stop(Config, _Service) ->
-    {ok, Config}.
-
-
+plugin_update(_Class, _NewSpec, _OldSpec, _Pid, _Service) ->
+    ok.
 
 
 
 %% ===================================================================
-%% Util
+%% Internal
 %% ===================================================================
+
 
 %% @private
-parse_clusters(_SrvId, [], Acc) ->
-    {ok, Acc};
+insert(Id, Config, SupPid, #{id:=SrvId}) ->
+    PoolConfig = Config#{
+        targets => maps:get(targets, Config),
+        debug => maps:get(debug, Config, false),
+        resolve_interval => maps:get(resolveInterval, Config, 0),
+        conn_resolve_fun => fun ?MODULE:conn_resolve/3,
+        conn_start_fun => fun ?MODULE:conn_start/1,
+        conn_stop_fun => fun ?MODULE:conn_stop/1
+    },
+    Spec = #{
+        id => Id,
+        start => {nkpacket_pool, start_link, [{SrvId, Id}, PoolConfig]}
+    },
+    case nkservice_packages_sup:update_child(SupPid, Spec, #{}) of
+        {ok, ChildPid} ->
+            nklib_proc:put({nkservice_pgsql, SrvId, Id}, undefined, ChildPid),
+            ?LLOG(debug, "started ~s (~p)", [Id, ChildPid]),
+            ok;
+        not_updated ->
+            ?LLOG(debug, "didn't upgrade ~s", [Id]),
+            ok;
+        {upgraded, ChildPid} ->
+            nklib_proc:put({nkservice_pgsql, SrvId, Id}, undefined, ChildPid),
+            ?LLOG(info, "upgraded ~s (~p)", [Id, ChildPid]),
+            ok;
+        {error, Error} ->
+            ?LLOG(notice, "start/update error ~s: ~p", [Id, Error]),
+            {error, Error}
+    end.
 
-parse_clusters(SrvId, [#{id:=Id, nodes:=Nodes} = Map|Rest], Acc) ->
-    case maps:is_key(Id, Acc) of
-        false ->
-            Nodes2 = [{Host, Port} || #{host:=Host, port:=Port} <- Nodes],
-            Opts = case Map of
-                #{keyspace:=KeySpace} ->
-                    [{keyspace, binary_to_atom(KeySpace, utf8)}];
-                _ ->
-                    []
+%% @private
+conn_resolve(#{url:=Url}, Config, _Pid) ->
+    ResOpts = #{schemes=>#{cassandra=>cassandra, tcp=>cassandra}},
+    UserOpts = maps:with([keyspace], Config),
+    case nkpacket_resolve:resolve(Url, ResOpts) of
+        {ok, List1} ->
+            do_conn_resolve(List1, UserOpts, []);
+        {error, Error} ->
+            lager:error("NKLOG ERR ~p ~p", []),
+            {error, Error}
+    end.
+
+%% @private
+do_conn_resolve([], _UserOpts, Acc) ->
+    {ok, lists:reverse(Acc)};
+
+do_conn_resolve([Conn|Rest], UserOpts, Acc) ->
+    case Conn of
+        #nkconn{protocol=cassandra, transp=Transp, port=Port, opts=Opts} ->
+            Transp2 = case Transp of
+                tcp ->
+                    tcp;
+                undefined ->
+                    tcp
             end,
-            parse_clusters(SrvId, Rest, Acc#{Id=>{Nodes2, Opts}});
-        true ->
-            {error, duplicated_id}
+            Port2 = case Port of
+                0 ->
+                    9042;
+                _ ->
+                    Port
+            end,
+            Opts2 = maps:merge(Opts, UserOpts),
+            Conn2 = Conn#nkconn{transp=Transp2, port=Port2, opts=Opts2},
+            do_conn_resolve(Rest, UserOpts, [Conn2|Acc]);
+        O ->
+            {error, {invalid_protocol, O}}
     end.
-
 
 
 %% @private
-%% This operation only add the nodes to a cluster id in cqerl_cluster
-%% There is currently no way to remove nodes,
-%% we can do exit(pid(cqerl_cluster), kill) and add nodes again, but we will remove from all instances
-%% of the service
-%% In any case it seems to be used only for clients when start
-%% Monitoring and everything is done at clients
-%%
-%% If we change the nodes, even if we restart the service, old nodes will remain!
-%% Even if we stop the service, the clients will remain connected
-
-start_clusters([]) ->
-    ok;
-
-start_clusters([{Id, {Hosts, Opts}}|Rest]) ->
-    case cqerl_cluster:add_nodes(Id, Hosts, Opts) of
-        ok ->
-            lager:notice("NkCassandra configured cluster '~s' (~p, ~p)", [Id, Hosts, Opts]),
-            start_clusters(Rest);
-        Other ->
-            {error, {could_not_start_cqerl_cluster, Other}}
+conn_start(#nkconn{transp=_Transp, ip=Ip, port=Port, opts=Opts}=Conn) ->
+    % Opts can include keyspace, auth (but fails with keyspace!)
+    Opts2 = maps:to_list(maps:with([auth], Opts)),
+    % See cqerl:get_client/2
+    Key = cqerl_client:make_key({Ip, Port}, Opts2),
+    case  ets:lookup(cqerl_client_tables, Key) of
+        [{client_table, Key, SupPid, _Table}] ->
+            {ok, SupPid};
+        [] ->
+            case gen_server:call(cqerl, {start_clients, {Ip, Port}, Opts2}, infinity) of
+                ok ->
+                    conn_start(Conn);
+                {error, Error} ->
+                    {error, Error}
+            end
     end.
+
+
+conn_stop(_Pid) ->
+    ok.
+
+
+
+
+
+
 
 

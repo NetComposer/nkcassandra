@@ -26,6 +26,8 @@
 -export([has_more_pages/1, fetch_more/1, fetch_more_async/1]).
 -export([size/1, head/1, head/2, tail/1, next/1, all_rows/1, all_rows/2]).
 
+-export([c1/0, c2/1, q/1]).
+
 -include_lib("cqerl/include/cqerl.hrl").
 
 %% ===================================================================
@@ -42,6 +44,32 @@
 %% ===================================================================
 %% Types
 %% ===================================================================
+
+
+c1() ->
+    cqerl:get_client({"127.0.0.1", 9042}).
+
+c2(Pos) ->
+    M = #{
+        1 => <<"tpa-es-deb-135.dev.sipstorm.com">>,
+        2 => <<"tpa-es-deb-136.dev.sipstorm.com">>,
+        3 => <<"tpa-es-deb-137.dev.sipstorm.com">>
+    },
+    cqerl:get_client({maps:get(Pos, M), 9042}).
+
+
+q(C) ->
+    q(C, "SELECT * from stats.topic_offsets_committed;").
+
+q(C, Str) ->
+    case nkcassandra:query(C, Str) of
+        {ok, Result} ->
+            {ok, cqerl:all_rows(Result)};
+        {error, Error} ->
+            {error, Error}
+    end.
+
+
 
 %% @doc Generates a new client
 %% It selects a node randomly from the cluster, and select a client already connected if present

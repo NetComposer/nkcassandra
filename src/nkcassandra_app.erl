@@ -59,6 +59,7 @@ start(_Type, _Args) ->
     case nklib_config:load_env(?APP, Syntax, Defaults) of
         {ok, _} ->
             {ok, Vsn} = application:get_key(?APP, vsn),
+            ok = nkservice_util:register_package(?PKG_CASSANDRA, nkcassandra),
             lager:info("NkCASSANDRA v~s is starting", [Vsn]),
             {ok, Pid} = nkcassandra_sup:start_link(),
             {ok, Pid};

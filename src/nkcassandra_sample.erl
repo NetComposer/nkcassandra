@@ -22,6 +22,7 @@
 -module(nkcassandra_sample).
 -author('Carlos Gonzalez <carlosj.gf@gmail.com>').
 -compile(export_all).
+-compile(nowarn_export_all).
 
 -include_lib("nkservice/include/nkservice.hrl").
 -define(SRV, cassandra_sample).
@@ -31,19 +32,35 @@
 %% ===================================================================
 
 
+
 %% @doc Starts the service
 start() ->
     Spec = #{
-        callback => ?MODULE,
-        nkcassandra => [
+        plugins => [?MODULE],
+        packages => [
             #{
-                id => cluster1,
-                nodes => [#{host=><<"localhost">>}]
-                %nodes => [#{host=><<"localhost">>}, #{host=>"1234"}, #{host=>"abc", port=>1234}],
-                %keyspace => keyspace1
+                id => cass1,
+                class => 'Cassandra',
+                config => #{
+                    targets => [
+                        #{
+                            url => "tcp://127.0.0.1"
+                        }
+                    ],
+                    %keyspace => <<"key1">>,
+                    debug => true
+                }
             }
         ]
-        %debug => [{nkcassandra, [full]}]
+%%        modules => [
+%%            #{
+%%                id => s1,
+%%                class => luerl,
+%%                code => s1(),
+%%                debug => true
+%%
+%%            }
+%%        ]
     },
     nkservice:start(?SRV, Spec).
 
@@ -53,13 +70,30 @@ stop() ->
     nkservice:stop(?SRV).
 
 
-plugin_deps() ->
-    [nkcassandra].
+% select * from system.eventlog
+luerl_query(Sql) ->
+    nkservice_luerl_instance:call({?SRV, s1, main}, [query], [nklib_util:to_binary(Sql)]).
 
 
-get_client() ->
-    {ok, C} = nkcassandra:get_client(cluster1),
-    C.
+s1() -> <<"
+    pgConfig = {
+        targets = {
+            {
+                url = 'postgresql://root@127.0.0.1:26257',
+                pool = 5
+            }
+        },
+        resolveInterval = 0,
+        debug = true
+    }
+
+    pg = startPackage('PgSQL', pgConfig)
+
+    function query(sql)
+        return pg.query(sql)
+    end
+
+">>.
 
 
 query1(C) ->
