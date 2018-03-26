@@ -51,16 +51,16 @@ start() ->
                     debug => true
                 }
             }
+        ],
+        modules => [
+            #{
+                id => s1,
+                class => luerl,
+                code => s1(),
+                debug => true
+
+            }
         ]
-%%        modules => [
-%%            #{
-%%                id => s1,
-%%                class => luerl,
-%%                code => s1(),
-%%                debug => true
-%%
-%%            }
-%%        ]
     },
     nkservice:start(?SRV, Spec).
 
@@ -72,25 +72,24 @@ stop() ->
 
 % select * from system.eventlog
 luerl_query(Sql) ->
-    nkservice_luerl_instance:call({?SRV, s1, main}, [query], [nklib_util:to_binary(Sql)]).
+    nkservice_luerl_instance:call({?SRV, s1, main}, [query], [nklib_util:to_binary(Sql)], 30000).
 
 
 s1() -> <<"
-    pgConfig = {
+    cassConfig = {
         targets = {
             {
-                url = 'postgresql://root@127.0.0.1:26257',
-                pool = 5
+                url = 'tcp://127.0.0.1'
             }
         },
         resolveInterval = 0,
         debug = true
     }
 
-    pg = startPackage('PgSQL', pgConfig)
+    cass = startPackage('Cassandra', cassConfig)
 
     function query(sql)
-        return pg.query(sql)
+        return cass.query(sql)
     end
 
 ">>.

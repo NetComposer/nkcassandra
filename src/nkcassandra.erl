@@ -22,11 +22,10 @@
 
 -module(nkcassandra).
 -author('Carlos Gonzalez <carlosj.gf@gmail.com>').
--export([get_client/1, query/2, query_async/2, query_async_wait/2]).
+-export([get_client/2, query/2, query_async/2, query_async_wait/2]).
 -export([has_more_pages/1, fetch_more/1, fetch_more_async/1]).
 -export([size/1, head/1, head/2, tail/1, next/1, all_rows/1, all_rows/2]).
-
--export([c1/0, c2/1, q/1]).
+-export([luerl_query/3]).
 
 -include_lib("cqerl/include/cqerl.hrl").
 
@@ -34,7 +33,6 @@
 %% Types
 %% ===================================================================
 
--type cluster_id() :: atom().
 -type client() :: term().
 -type sql() :: string() | binary().
 -type result() :: #cql_result{}.
@@ -46,40 +44,21 @@
 %% ===================================================================
 
 
-c1() ->
-    cqerl:get_client({"127.0.0.1", 9042}).
+%% @doc Generates a reference to a client to use for queries
+%% It first go to the pooler to select on the instances, and, if the cqerl
+%% connection pooling is not yet started, launch it.
+%% Then we use standard cqerl tool to get a connection from the selected url pool
 
-c2(Pos) ->
-    M = #{
-        1 => <<"tpa-es-deb-135.dev.sipstorm.com">>,
-        2 => <<"tpa-es-deb-136.dev.sipstorm.com">>,
-        3 => <<"tpa-es-deb-137.dev.sipstorm.com">>
-    },
-    cqerl:get_client({maps:get(Pos, M), 9042}).
+-spec get_client(nkservice:id(), nkservice:package_id()) ->
+    {ok, client()} | {error, term()}.
 
-
-q(C) ->
-    q(C, "SELECT * from stats.topic_offsets_committed;").
-
-q(C, Str) ->
-    case nkcassandra:query(C, Str) of
-        {ok, Result} ->
-            {ok, cqerl:all_rows(Result)};
+get_client(SrvId, PackageId) ->
+    case nkpacket_pool:get_conn_pid({SrvId, to_bin(PackageId)}) of
+        {ok, _SupPid, #{conn_id:={_, Ip, Port}}} ->
+            cqerl:get_client({Ip, Port});
         {error, Error} ->
             {error, Error}
     end.
-
-
-
-%% @doc Generates a new client
-%% It selects a node randomly from the cluster, and select a client already connected if present
-%% Clients will remain even if we stop the service
-
--spec get_client(cluster_id()) ->
-    {ok, client()} | {error, term()}.
-
-get_client(Cluster) ->
-    cqerl:get_client(Cluster).
 
 
 %% @doc
@@ -197,3 +176,33 @@ all_rows(Result) ->
 all_rows(Result, Opts) ->
     cqerl:all_rows(Result, Opts).
 
+
+
+
+%% ===================================================================
+%% Luerl API
+%% ===================================================================
+
+%% @doc
+luerl_query(SrvId, PackageId, [Query]) ->
+    case get_client(SrvId, PackageId) of
+        {ok, Client} ->
+            case query(Client, Query) of
+                {ok, Result} ->
+                    List = cqerl:all_rows(Result),
+                    [List];
+                {error, Error} ->
+                    {error, Error}
+            end;
+        {error, Error} ->
+            {error, Error}
+    end.
+
+
+% ===================================================================
+%% Internal
+%% ===================================================================
+
+%% @private
+to_bin(Term) when is_binary(Term) -> Term;
+to_bin(Term) -> nklib_util:to_binary(Term).

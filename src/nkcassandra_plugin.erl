@@ -49,7 +49,7 @@ plugin_deps() ->
 plugin_api(?PKG_CASSANDRA) ->
     #{
         luerl => #{
-            query => {nkservice_pgsql, luerl_query}
+            query => {nkcassandra, luerl_query}
         }
     };
 
@@ -108,11 +108,19 @@ plugin_update(_Class, _NewSpec, _OldSpec, _Pid, _Service) ->
 %% Internal
 %% ===================================================================
 
+%% We start a pooler to a number of cassandra instances, with different weight
+%% When a new request arrives, we start a cqerl pool for each url and
+%% monitor the cqerl supervisor
+%% When we call nkcassandra:get_client/2, we first check if the supervisor
+%% is available (and start it if it is not), then we use the standard cqerl client
+%% pooling system
 
 %% @private
 insert(Id, Config, SupPid, #{id:=SrvId}) ->
+    Targets1 = maps:get(targets, Config, []),
+    Targets2 = [T#{pool=>1} || T <- Targets1],
     PoolConfig = Config#{
-        targets => maps:get(targets, Config),
+        targets => Targets2,
         debug => maps:get(debug, Config, false),
         resolve_interval => maps:get(resolveInterval, Config, 0),
         conn_resolve_fun => fun ?MODULE:conn_resolve/3,
@@ -148,7 +156,6 @@ conn_resolve(#{url:=Url}, Config, _Pid) ->
         {ok, List1} ->
             do_conn_resolve(List1, UserOpts, []);
         {error, Error} ->
-            lager:error("NKLOG ERR ~p ~p", []),
             {error, Error}
     end.
 
@@ -180,6 +187,7 @@ do_conn_resolve([Conn|Rest], UserOpts, Acc) ->
 
 
 %% @private
+%% What we really do is start and monitor the CQERL supervisor
 conn_start(#nkconn{transp=_Transp, ip=Ip, port=Port, opts=Opts}=Conn) ->
     % Opts can include keyspace, auth (but fails with keyspace!)
     Opts2 = maps:to_list(maps:with([auth], Opts)),
@@ -198,7 +206,9 @@ conn_start(#nkconn{transp=_Transp, ip=Ip, port=Port, opts=Opts}=Conn) ->
     end.
 
 
-conn_stop(_Pid) ->
+conn_stop(Pid) ->
+    % Stop the CQERL supervisor
+    sys:terminate(Pid, normal),
     ok.
 
 
