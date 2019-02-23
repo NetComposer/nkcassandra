@@ -1,5 +1,6 @@
 APP = nkcassandra
 REBAR = rebar3
+AFLAGS = "-kernel shell_history enabled -kernel logger_sasl_compatible true"
 
 .PHONY: rel stagedevrel package version all tree shell
 
@@ -60,5 +61,4 @@ docs:
 
 
 shell:
-	$(REBAR) shell --config config/shell.config --name $(APP)@127.0.0.1 --setcookie nk --apps $(APP)
-
+	ERL_AFLAGS=$(AFLAGS) $(REBAR) shell --config config/shell.config --name $(APP)@127.0.0.1 --setcookie nk --apps $(APP)

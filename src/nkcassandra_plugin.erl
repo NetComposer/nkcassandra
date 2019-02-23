@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% Copyright (c) 2017 Carlos Gonzalez Florido.  All Rights Reserved.
+%% Copyright (c) 2019 Carlos Gonzalez Florido.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -18,16 +18,16 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc NkCASSANDRA plugun
+%% @doc NkCASSANDRA service
 
 -module(nkcassandra_plugin).
 -author('Carlos Gonzalez <carlosj.gf@gmail.com>').
-
--export([plugin_deps/0, plugin_api/1, plugin_config/3, plugin_start/4, plugin_update/5]).
+-export([plugin_deps/0, plugin_config/3,
+         plugin_start/3, plugin_update/4]).
 -export([conn_resolve/3, conn_start/1, conn_stop/1]).
 
 -include("nkcassandra.hrl").
--include_lib("nkservice/include/nkservice.hrl").
+-include_lib("nkserver/include/nkserver.hrl").
 -include_lib("nkpacket/include/nkpacket.hrl").
 -include_lib("cqerl/include/cqerl.hrl").
 
@@ -36,8 +36,6 @@
 
 %% ===================================================================
 %% Plugin callbacks
-%%
-%% These are used when NkCASSANDRA is started as a NkSERVICE plugin
 %% ===================================================================
 
 
@@ -46,19 +44,7 @@ plugin_deps() ->
     [].
 
 %% @doc
-plugin_api(?PKG_CASSANDRA) ->
-    #{
-        luerl => #{
-            query => {nkcassandra, luerl_query}
-        }
-    };
-
-plugin_api(_Class) ->
-    #{}.
-
-
-%% @doc
-plugin_config(?PKG_CASSANDRA, #{config:=Config}=Spec, _Service) ->
+plugin_config(_SrvId, Config, #{class:=?PACKAGE_CASSANDRA}) ->
     Syntax = #{
         targets => {list, #{
             url => binary,
@@ -67,40 +53,27 @@ plugin_config(?PKG_CASSANDRA, #{config:=Config}=Spec, _Service) ->
         }},
         keyspace => binary,
         debug => boolean,
-        resolveInterval => {integer, 0, none},
+        resolve_interval => {integer, 0, none},
         '__mandatory' => [targets]
     },
-    case nklib_syntax:parse(Config, Syntax) of
-        {ok, Parsed, _} ->
-            {ok, Spec#{config:=Parsed}};
-        {error, Error} ->
-            {error, Error}
-    end;
-
-plugin_config(_Class, _Package, _Service) ->
-    continue.
+    nkserver_util:parse_config(Config, Syntax).
 
 
 %% @doc
-plugin_start(?PKG_CASSANDRA, #{id:=Id, config:=Config}, Pid, Service) ->
-    insert(Id, Config, Pid, Service);
+plugin_start(SrvId, Config, Service) ->
+    insert(SrvId, Config, Service).
 
-plugin_start(_Id, _Spec, _Pid, _Service) ->
-    continue.
 
 
 %% @doc
-%% Even if we are called only with modified config, we check if the spec is new
-plugin_update(?PKG_CASSANDRA, #{id:=Id, config:=NewConfig}, OldSpec, Pid, Service) ->
-    case OldSpec of
-        #{config:=NewConfig} ->
+%% @doc
+plugin_update(SrvId, NewConfig, OldConfig, Service) ->
+    case NewConfig of
+        OldConfig ->
             ok;
         _ ->
-            insert(Id, NewConfig, Pid, Service)
-    end;
-
-plugin_update(_Class, _NewSpec, _OldSpec, _Pid, _Service) ->
-    ok.
+            insert(SrvId, NewConfig, Service)
+    end.
 
 
 
@@ -116,37 +89,36 @@ plugin_update(_Class, _NewSpec, _OldSpec, _Pid, _Service) ->
 %% pooling system
 
 %% @private
-insert(Id, Config, SupPid, #{id:=SrvId}) ->
+insert(SrvId, Config, Service) ->
     Targets1 = maps:get(targets, Config, []),
     Targets2 = [T#{pool=>1} || T <- Targets1],
     PoolConfig = Config#{
         targets => Targets2,
         debug => maps:get(debug, Config, false),
-        resolve_interval => maps:get(resolveInterval, Config, 0),
+        resolve_interval => maps:get(resolve_interval, Config, 0),
         conn_resolve_fun => fun ?MODULE:conn_resolve/3,
         conn_start_fun => fun ?MODULE:conn_start/1,
         conn_stop_fun => fun ?MODULE:conn_stop/1
     },
     Spec = #{
-        id => Id,
-        start => {nkpacket_pool, start_link, [{SrvId, Id}, PoolConfig]}
+        id => SrvId,
+        start => {nkpacket_pool, start_link, [SrvId, PoolConfig]}
     },
-    case nkservice_packages_sup:update_child(SupPid, Spec, #{}) of
-        {ok, ChildPid} ->
-            nklib_proc:put({nkservice_pgsql, SrvId, Id}, undefined, ChildPid),
-            ?LLOG(debug, "started ~s (~p)", [Id, ChildPid]),
+    case nkserver_workers_sup:update_child(SrvId, Spec, #{}) of
+        {added, _} ->
+            ?SRV_LOG(info, "pooler started", [], Service),
+            ok;
+        upgraded ->
+            ?SRV_LOG(info, "pooler upgraded", [], Service),
             ok;
         not_updated ->
-            ?LLOG(debug, "didn't upgrade ~s", [Id]),
-            ok;
-        {upgraded, ChildPid} ->
-            nklib_proc:put({nkservice_pgsql, SrvId, Id}, undefined, ChildPid),
-            ?LLOG(info, "upgraded ~s (~p)", [Id, ChildPid]),
+            ?SRV_LOG(debug, "pooler didn't upgrade", [], Service),
             ok;
         {error, Error} ->
-            ?LLOG(notice, "start/update error ~s: ~p", [Id, Error]),
+            ?SRV_LOG(notice, "pooler start/update error: ~p", [Error], Service),
             {error, Error}
     end.
+
 
 %% @private
 conn_resolve(#{url:=Url}, Config, _Pid) ->
