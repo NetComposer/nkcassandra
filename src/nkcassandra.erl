@@ -18,191 +18,144 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc NkCASSANDRA application
+%% @doc NkCASSANDRA API
 
 -module(nkcassandra).
 -author('Carlos Gonzalez <carlosj.gf@gmail.com>').
--export([get_client/2, query/2, query_async/2, query_async_wait/2]).
--export([has_more_pages/1, fetch_more/1, fetch_more_async/1]).
--export([size/1, head/1, head/2, tail/1, next/1, all_rows/1, all_rows/2]).
--export([luerl_query/3]).
+-export([query/2, query/3, query/4]).
 
--include_lib("cqerl/include/cqerl.hrl").
+
+-define(LLOG(Type, Txt, Args),
+    lager:Type("NkCASSANDRA Client "++Txt, Args)).
+
 
 %% ===================================================================
 %% Types
 %% ===================================================================
 
--type client() :: term().
--type sql() :: string() | binary().
--type result() :: #cql_result{}.
--type query_tag() :: reference().
--type proplist() :: lists:proplist().
+-type value() ::
+    binary() | string() | atom() |
+    {value_type(), term()}.
+
+-type value_type() ::
+    ascii |
+    bigint |
+    blob |
+    boolean |
+    counter |
+    decimal |
+    double |
+    float |
+    int |
+    timestamp |
+    uuid |
+    varchar |
+    varint |
+    timeuuid |
+    inet |
+    list |
+    map |
+    set |
+    udt |
+    tuple.
+
+
+-type consistency() ::
+    any |
+    one |
+    two |
+    three |
+    quorum |
+    all |
+    local_quorum |
+    each_quorum |
+    serial |
+    local_serial |
+    local_one.
+
 
 %% ===================================================================
 %% Types
 %% ===================================================================
 
+%% @doc
+-spec query(nkserver:id() | {nkserver:id(), pid()}, iolist()|string()) ->
+    ok | {ok, nkcassandra_protocol:cql_result()} |
+    {error, nkcassandra_protocol:error()|term()}.
 
-%% @doc Generates a reference to a client to use for queries
-%% It first go to the pooler to select on the instances, and, if the cqerl
-%% connection pooling is not yet started, launch it.
-%% Then we use standard cqerl tool to get a connection from the selected url pool
-
--spec get_client(nkservice:id(), nkservice:package_id()) ->
-    {ok, client()} | {error, term()}.
-
-get_client(SrvId, PackageId) ->
-    case nkpacket_pool:get_conn_pid({SrvId, to_bin(PackageId)}) of
-        {ok, _SupPid, #{conn_id:={_, Ip, Port}}} ->
-            cqerl:get_client({Ip, Port});
-        {error, Error} ->
-            {error, Error}
-    end.
+query(Id, Query) ->
+    query(Id, Query, undefined, one).
 
 
 %% @doc
--spec query(client(), sql()) ->
-    {ok, result()} | {error, term()}.
+-spec query(nkserver:id() | {nkserver:id(), pid()}, iolist()|string(), [value()]) ->
+    ok | {ok, binary(), list(), list()} |
+    {error, nkcassandra_protocol:error()|term()}.
 
-query(Client, SQL) ->
-    cqerl:run_query(Client, SQL).
-
-
-%% @doc
--spec query_async(client(), sql()) ->
-    query_tag().
-
-query_async(Client, SQL) ->
-    cqerl:send_query(Client, SQL).
+query(Id, Query, Values) ->
+    query(Id, Query, Values, one).
 
 
 %% @doc
--spec query_async_wait(query_tag(), pos_integer()) ->
-    term().
+-spec query(nkserver:id() | {nkserver:id(), pid()}, iolist()|string(), [value()], consistency()) ->
+    ok | {ok, binary(), list(), list()} |
+    {error, nkcassandra_protocol:error()|term()}.
 
-query_async_wait(Tag, Timeout) ->
-    receive
-        {result, Tag, Result} ->
-            {ok, Result};
-        {error, Tag, Error} ->
-            {error, Error}
-    after Timeout ->
-        {error, Timeout}
-    end.
-
-
-%% @doc Check to see if there are more result available
--spec has_more_pages(result()) ->
-    true | false.
-
-has_more_pages(Result) ->
-    cqerl:has_more_pages(Result).
-
-
-%% @doc Fetch the next page of result from Cassandra for a given continuation. The function will
-%%            return with the result from Cassandra (synchronously).
--spec fetch_more(result()) ->
-    no_more_result | {ok, result()}.
-
-fetch_more(Result) ->
-    cqerl:fetch_more(Result).
-
-
-%% @doc Asynchronously fetch the next page of result from cassandra for a given continuation.
--spec fetch_more_async(result()) ->
-    query_tag() | no_more_result.
-
-fetch_more_async(Result) ->
-    cqerl:fetch_more_async(Result).
-
-
-%% @doc The number of rows in a result set
--spec size(result()) ->
-    integer().
-
-size(Result) ->
-    cqerl:size(Result).
-
-
-%% @doc Returns the first row of result, as a property list
--spec head(result()) ->
-    empty_dataset | proplist().
-
-head(Result) ->
-    cqerl:head(Result).
-
-
-%% @doc Returns the first row of result, as a property list
--spec head(result(), list()) ->
-    empty_dataset | proplist().
-
-head(Result, Opts) ->
-    cqerl:head(Result, Opts).
-
-
-
-%% @doc Returns all rows of result, except the first one
--spec tail(result()) ->
-    empty_dataset | result().
-
-tail(Result) ->
-    cqerl:tail(Result).
-
-
-%% @doc Returns a tuple of <code>{HeadRow, ResultTail}</code>.
-%% This can be used to iterate over a result set efficiently. Successively
-%% call this function over the result set to go through all rows, until it
-%% returns the <code>empty_dataset</code> atom.
--spec next(result()) ->
-    empty_dataset | {Head::proplist(), Tail::result()}.
-
-next(Result) ->
-    cqerl:next(Result).
-
-
-%% @doc Returns a list of rows as property lists
--spec all_rows(result()) ->
-    [proplist()].
-
-all_rows(Result) ->
-    cqerl:all_rows(Result).
-
-
-%% @doc Returns a list of rows as property lists
--spec all_rows(result(), list()) ->
-    [proplist()].
-
-all_rows(Result, Opts) ->
-    cqerl:all_rows(Result, Opts).
-
+query(Id, Query, Values, Level) ->
+    query(Id, Query, Values, Level, 10).
 
 
 
 %% ===================================================================
-%% Luerl API
-%% ===================================================================
-
-%% @doc
-luerl_query(SrvId, PackageId, [Query]) ->
-    case get_client(SrvId, PackageId) of
-        {ok, Client} ->
-            case query(Client, Query) of
-                {ok, Result} ->
-                    List = cqerl:all_rows(Result),
-                    [List];
-                {error, Error} ->
-                    {error, Error}
-            end;
-        {error, Error} ->
-            {error, Error}
-    end.
-
-
-% ===================================================================
 %% Internal
 %% ===================================================================
 
 %% @private
-to_bin(Term) when is_binary(Term) -> Term;
-to_bin(Term) -> nklib_util:to_binary(Term).
+query({SrvId, Pid}, Query, Values, Level, Tries) when is_atom(SrvId), is_pid(Pid), Tries > 0 ->
+    Debug = nkserver:get_cached_config(SrvId, nkcassandra, debug),
+    case Debug of
+        true ->
+            ?LLOG(debug, "QUERY: ~s", [Query]);
+        _ ->
+            ok
+    end,
+    Result = nkcassandra_protocol:query(Pid, Query, Values, Level),
+    case Debug of
+        true ->
+            ?LLOG(debug, "RESULT: ~s", [Query]);
+        _ ->
+            ok
+    end,
+    case Result of
+        ok ->
+            ok;
+        {ok, QueryResult} ->
+            {ok, QueryResult};
+        {error, {cql_error, Code, Msg}} ->
+            {error, {cql_error, Code, Msg}};
+        {error, Error} when Tries > 1 ->
+            ?LLOG(error, "error in query ~s: ~p, retrying", [Query, Error]),
+            timer:sleep(1000),
+            % Next time forget the pid and get a new one
+            query(SrvId, Query, Values, Level, Tries-1);
+        {error, Error} ->
+            {error, Error}
+    end;
+
+query(SrvId, Query, Values, Level, Tries) when is_atom(SrvId), Tries > 0 ->
+    case nkpacket_pool:get_conn_pid(SrvId) of
+        {ok, Pid, _} ->
+            query({SrvId, Pid}, Query, Values, Level, Tries);
+        {error, Error} when Tries > 1 ->
+            ?LLOG(error, "error in get_connection: ~p, retrying", [Query, Error]),
+            timer:sleep(1000),
+            query(SrvId, Query, Values, Level, Tries-1);
+        {error, Error} ->
+            {error, Error}
+    end;
+
+
+query(_SrvId, _Query, _Values, _Level, _Tries) ->
+    {error, too_many_tries}.
+
+

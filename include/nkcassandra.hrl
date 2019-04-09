@@ -25,7 +25,7 @@
 %% Defines
 %% ===================================================================
 
--define(PACKAGE_CASSANDRA, <<"Cassandra">>).
+-define(PACKAGE_CLASS_CASSANDRA, <<"Cassandra">>).
 
 %% ===================================================================
 %% Records

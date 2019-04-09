@@ -4,6 +4,6 @@
     {modules, []},
     {registered, []},
     {mod, {nkcassandra_app, []}},
-    {applications, [nkpacket, nkserver, cqerl]},
+    {applications, [nkpacket, nkserver]},
     {env, []}
 ]}.

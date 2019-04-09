@@ -52,14 +52,15 @@ start() ->
 
 %% @private OTP standard start callback
 start(_Type, _Args) ->
+    application:stop(marina),
     Syntax = #{
     },
     case nklib_config:load_env(?APP, Syntax) of
         {ok, _} ->
             {ok, Vsn} = application:get_key(?APP, vsn),
-            ok = nkserver_util:register_package(?PACKAGE_CASSANDRA, nkcassandra),
             lager:info("NkCASSANDRA v~s is starting", [Vsn]),
             {ok, Pid} = nkcassandra_sup:start_link(),
+            nkserver_util:register_package_class(?PACKAGE_CLASS_CASSANDRA, nkcassandra),
             {ok, Pid};
         {error, Error} ->
             lager:error("Error parsing config: ~p", [Error]),
