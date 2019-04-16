@@ -58,8 +58,9 @@
         ])).
 
 
--define(SYNC_CALL_TIMEOUT, 5*1000).
+-define(SYNC_CALL_TIMEOUT, 3*5*1000).
 -define(TIMEOUT, 180000).
+-define(OP_TIMEOUT, 3000).
 
 -define(PASSWORD_AUTHENTICATOR, <<"org.apache.cassandra.auth.PasswordAuthenticator">>).
 
@@ -310,8 +311,9 @@ conn_parse(close, _NkPort, State) ->
     {ok, State};
 
 conn_parse(Bin, NkPort, #state{buffer=Buffer}=State) ->
-    case nkcassandra_frame:parse(Bin, Buffer) of
-        {ok, #ecql_frame{opcode=OpCode, version=?VER_RESP}=Frame, Buffer2} ->
+    Bin2 = <<Buffer/binary, Bin/binary>>,
+    case nkcassandra_frame:parse(Bin2) of
+        {ok, #ecql_frame{opcode=OpCode, version=?VER_RESP}=Frame, Bin3} ->
             #ecql_frame{message=Msg, stream=StreamId} = Frame,
             Result = case OpCode of
                 ?OP_AUTHENTICATE ->
@@ -323,16 +325,13 @@ conn_parse(Bin, NkPort, #state{buffer=Buffer}=State) ->
                     parse_frame(OpCode, Msg, StreamId, State)
             end,
             case Result of
-                {ok, State2} when byte_size(Buffer2) >= 9 ->
-                    conn_parse(Buffer2, NkPort, State2#state{buffer = <<>>});
                 {ok, State2} ->
-                    {ok, State2#state{buffer = Buffer2}};
+                    conn_parse(Bin3, NkPort, State2#state{buffer = <<>>});
                 {stop, Stop, State2} ->
                     {stop, Stop, State2}
             end;
-        {more, Buffer2} ->
-            % Never seems to be 'more'
-            {ok, State#state{buffer = Buffer2}}
+        more ->
+            {ok, State#state{buffer=Bin2}}
     end.
 
 %% @private
@@ -433,8 +432,14 @@ conn_handle_cast(do_stop, _NkPort, State) ->
 -spec conn_handle_info(term(), nkpacket:nkport(), #state{}) ->
     {ok, #state{}} | {stop, Reason::term(), #state{}}.
 
-conn_handle_info(_Info, _NkPort, State) ->
-    {ok, State}.
+conn_handle_info({op_timeout, StreamId}, _NkPort, State) ->
+    ?LLOG(warning, "received timeout for ~p", [StreamId], State),
+    {ok, State2} = response({error, op_timeout}, StreamId, State),
+    %{stop, op_timeout, State2},
+    {ok, State2};
+
+conn_handle_info(_Info, _NkPort, _State) ->
+    continue.
 
 
 %% @doc Called when the connection stops
@@ -533,8 +538,15 @@ received_result(_OpCode, Resp, StreamId, State) ->
 %% @private
 request(Frame, From, NkPort, #state{trans=Trans, next_stream_id = StreamId}=State) ->
     Bin = nkcassandra_frame:serialize(Frame#ecql_frame{stream=StreamId}),
+    Timer = case From of
+        undefined ->
+            undefined;
+        _ ->
+            erlang:send_after(?OP_TIMEOUT, self(), {op_timeout, StreamId})
+    end,
     Op = #trans{
         stream_id = StreamId,
+        timer = Timer,
         from = From
     },
     % Size seems to be always 1 at maximum
@@ -546,15 +558,18 @@ request(Frame, From, NkPort, #state{trans=Trans, next_stream_id = StreamId}=Stat
 
 %% @private
 response(Reply, StreamId, #state{trans=Trans}=State) ->
-    case maps:find(StreamId, Trans) of
-        {ok, #trans{from=undefined}} ->
-            ok;
-        {ok, #trans{from=From}} ->
-            gen_server:reply(From, Reply);
+    Trans2 = case maps:take(StreamId, Trans) of
+        {#trans{from=undefined}, Trans0} ->
+            Trans0;
+        {#trans{timer=Timer, from=From}, Trans0} ->
+            nklib_util:cancel_timer(Timer),
+            gen_server:reply(From, Reply),
+            Trans0;
         error ->
-            ok
+            ?LLOG(warning, "Op not found on response: ~p (~p)", [StreamId, Reply], State),
+            Trans
     end,
-    {ok, State#state{trans = maps:remove(StreamId, Trans)}}.
+    {ok, State#state{trans=Trans2}}.
 
 
 %% @private

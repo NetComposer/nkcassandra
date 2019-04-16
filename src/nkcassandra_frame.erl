@@ -46,41 +46,41 @@
 -include("ecql.hrl").
 -include("ecql_types.hrl").
 
--export([parse/2, serialize/1]).
+-export([parse/1, serialize/1]).
 
 
 %% @doc
-parse(Bin, Acc) ->
-    Acc2 = <<Acc/binary, Bin/binary>>,
-    case Acc2 of
-        % Will match if length >= 9
-        <<
-            Vsn:?BYTE,
-            Flags:?BYTE,
-            Stream:?SHORT,
-            OpCode:?BYTE,
-            Length:32/big-integer,
-            Rest/binary
-        >> ->
-            ?VER_RESP = Vsn,
-            case byte_size(Bin) >= Length of
-                true ->
-                    Frame = #ecql_frame{
-                        version = ?VER_RESP,
-                        flags = Flags,
-                        stream = Stream,
-                        opcode = OpCode,
-                        length = Length
-                    },
-                    <<Body:Length/binary, Rest2/binary>> = Rest,
-                    Resp = parse_resp(Frame#ecql_frame{body = Body}),
-                    {ok, Frame#ecql_frame{message = Resp}, Rest2};
-                false ->
-                    {more, Acc2}
-            end;
-        _ ->
-            {more, Acc2}
-    end.
+parse(Bin) when byte_size(Bin) >= 9 ->
+    <<
+        Vsn:?BYTE,
+        Flags:?BYTE,
+        Stream:?SHORT,
+        OpCode:?BYTE,
+        Length:32/big-integer,
+        Rest/binary
+    >> = Bin,
+    ?VER_RESP = Vsn,
+    case byte_size(Bin) >= Length of
+        true ->
+            Frame = #ecql_frame{
+                version = ?VER_RESP,
+                flags = Flags,
+                stream = Stream,
+                opcode = OpCode,
+                length = Length
+            },
+            <<Body:Length/binary, Rest2/binary>> = Rest,
+            Resp = parse_resp(Frame#ecql_frame{body = Body}),
+            {ok, Frame#ecql_frame{message = Resp}, Rest2};
+        false ->
+            more
+    end;
+
+parse(_Bin) ->
+    more.
+
+
+
 
 
 %% @private

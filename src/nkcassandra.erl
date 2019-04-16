@@ -22,7 +22,7 @@
 
 -module(nkcassandra).
 -author('Carlos Gonzalez <carlosj.gf@gmail.com>').
--export([query/2, query/3, query/4]).
+-export([query/2, query/3, query/4, options/1]).
 
 
 -define(LLOG(Type, Txt, Args),
@@ -102,7 +102,18 @@ query(Id, Query, Values) ->
     {error, nkcassandra_protocol:error()|term()}.
 
 query(Id, Query, Values, Level) ->
-    query(Id, Query, Values, Level, 10).
+    query(Id, Query, Values, Level, 2).
+
+
+%% @doc
+options(Id) ->
+    case nkpacket_pool:get_conn_pid(Id) of
+        {ok, Pid, _} ->
+            nkcassandra_protocol:options(Pid);
+        {error, Error} ->
+            {error, Error}
+    end.
+
 
 
 
@@ -122,7 +133,7 @@ query({SrvId, Pid}, Query, Values, Level, Tries) when is_atom(SrvId), is_pid(Pid
     Result = nkcassandra_protocol:query(Pid, Query, Values, Level),
     case Debug of
         true ->
-            ?LLOG(debug, "RESULT: ~s", [Query]);
+            ?LLOG(debug, "RESULT: ~p", [Result]);
         _ ->
             ok
     end,
