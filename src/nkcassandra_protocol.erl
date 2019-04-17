@@ -607,11 +607,11 @@ encode_value([V|Values], Acc) when is_binary(V); is_atom(V); is_list(V) ->
     encode_value(Values, [nkcassandra_types:encode(V) | Acc]);
 
 encode_value([{NameOrType, Val} | Values], Acc) ->
-    case nkcassandra_types:is_type(NameOrType) of
-        true ->
-            encode_value(Values, [nkcassandra_types:encode(NameOrType, Val) | Acc]);
-        false ->
-            encode_value(Values, [{to_bin(NameOrType), nkcassandra_types:encode(Val)} | Acc])
+    case nkcassandra_types:value(NameOrType) of
+        undefined ->
+            encode_value(Values, [{to_bin(NameOrType), nkcassandra_types:encode(Val)} | Acc]);
+        _ ->
+            encode_value(Values, [nkcassandra_types:encode(NameOrType, Val) | Acc])
     end.
 
 

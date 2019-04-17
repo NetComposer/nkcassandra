@@ -80,9 +80,6 @@ parse(_Bin) ->
     more.
 
 
-
-
-
 %% @private
 parse_resp(#ecql_frame{opcode = ?OP_ERROR, body = Body}) ->
     <<Code:?INT, Rest/binary>> = Body,
@@ -163,7 +160,7 @@ parse_error(Error, Bin) -> %% default
 parse_event(EvenType, Bin) when EvenType =:= <<"TOPOLOGY_CHANGE">>; EvenType =:= <<"STATUS_CHANGE">> ->
     {Change, Rest} = parse_string(Bin),
     {IpBytes, Rest2} = parse_bytes(Rest),
-    {Ip, _} = nkcassandra_types:decode(inet, size(IpBytes), IpBytes),
+    {Ip, _} = nkcassandra_types:decode(inet, IpBytes),
     {{Change, Ip}, Rest2};
 
 parse_event(<<"SCHEMA_CHANGE">>, Bin) ->
@@ -357,7 +354,7 @@ parse_cell(_Col, <<-1:?INT, Bin/binary>>) ->
     {null, Bin};
 parse_cell({_Name, Type}, Bin) ->
     {Bytes, Rest} = parse_bytes(Bin),
-    {Val, _}= nkcassandra_types:decode(Type, size(Bytes), Bytes),
+    Val = nkcassandra_types:decode(Type, Bytes),
     {Val, Rest}.
 
 %% @private
@@ -585,6 +582,7 @@ serialize_short_bytes(Bytes) ->
 %% @private
 serialize_bytes(Bin) ->
     nkcassandra_types:to_bytes(Bin).
+
 
 %%serialize_option_list(Options) ->
 %%    Bin = << <<(serialize_option(Opt))/binary>> || Opt <- Options >>,

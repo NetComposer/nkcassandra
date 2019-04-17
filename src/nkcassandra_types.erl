@@ -30,15 +30,15 @@
 -include("ecql_types.hrl").
 
 -export([consistency_value/1, consistency_name/1]).
--export([name/1, value/1, is_type/1, encode/1, encode/2,
-    decode/2, decode/3, to_bytes/1, from_bytes/1]).
+-export([name/1, value/1, encode/1, encode/2, decode/2, to_bytes/1, from_bytes/1]).
+-export([test/0]).
 
 %%------------------------------------------------------------------------------
 %% Type Name
 %%------------------------------------------------------------------------------
 
 
-%% @private
+%% @doc
 consistency_value(any)          -> ?CL_ANY;
 consistency_value(one)          -> ?CL_ONE;
 consistency_value(two)          -> ?CL_TWO;
@@ -52,7 +52,7 @@ consistency_value(local_serial) -> ?CL_LOCAL_SERIAL;
 consistency_value(local_one)    -> ?CL_LOCAL_ONE.
 
 
-%%%% @private
+%% @doc
 consistency_name(?CL_ANY)          -> any;
 consistency_name(?CL_ONE)          -> one;
 consistency_name(?CL_TWO)          -> two;
@@ -66,6 +66,7 @@ consistency_name(?CL_LOCAL_SERIAL) -> local_serial;
 consistency_name(?CL_LOCAL_ONE)    -> local_one.
 
 
+%% @doc
 name(?TYPE_CUSTOM)   -> custom;
 name(?TYPE_ASCII)    -> ascii;
 name(?TYPE_BIGINT)   -> bigint;
@@ -88,6 +89,8 @@ name(?TYPE_SET)      -> set;
 name(?TYPE_UDT)      -> udt;
 name(?TYPE_TUPLE)    -> tuple.
 
+
+%% @doc
 value(custom)        -> ?TYPE_CUSTOM;
 value(ascii)         -> ?TYPE_ASCII;
 value(bigint)        -> ?TYPE_BIGINT;
@@ -108,15 +111,15 @@ value(list)          -> ?TYPE_LIST;
 value(map)           -> ?TYPE_MAP;
 value(set)           -> ?TYPE_SET;
 value(udt)           -> ?TYPE_UDT;
-value(tuple)         -> ?TYPE_TUPLE.
+value(tuple)         -> ?TYPE_TUPLE;
+value(_)             -> unknown.
 
-is_type(T) ->
-    try value(T) of _I -> true catch error:_ -> false end.
 
 %%------------------------------------------------------------------------------
 %% Encode
 %%------------------------------------------------------------------------------
 
+%% @doc
 encode(A) when is_atom(A) ->
     encode(text, atom_to_list(A));
 
@@ -129,6 +132,8 @@ encode(B) when is_binary(B) ->
 encode({Type, Val}) when is_atom(Type) ->
     encode(Type, Val).
 
+
+%% @doc
 encode(ascii, Bin) ->
     Bin;
 
@@ -166,9 +171,11 @@ encode(inet, {A, B, C, D, E, F, G, H}) ->
 encode(int, Int) ->
     <<Int:?INT>>;
 
-encode({list, ElType}, List) ->
-    Encode = fun(El) -> to_bytes(encode(ElType, El)) end,
-    ListBin = << <<(Encode(El))/binary>> || El <- List >>,
+encode({list, Type}, List) ->
+    ListBin = <<
+        <<(to_bytes(encode(Type, Term)))/binary>>
+        || Term <- List
+    >>,
     <<(length(List)):?INT, ListBin/binary>>;
 
 encode({map, {KType, VType}}, Map) ->
@@ -180,8 +187,8 @@ encode({map, {KType, VType}}, Map) ->
     MapBin = << <<(Encode(Key, Val))/binary>> || {Key, Val} <- Map >>,
     <<(length(Map)):?INT, MapBin/binary>>;
 
-encode({set, ElType}, Set) ->
-    encode({list, ElType}, ordsets:to_list(ordsets:from_list(Set)));
+encode({set, Type}, Set) ->
+    encode({list, Type}, lists:usort(Set));
 
 encode(text, Str) when is_list(Str) ->
     list_to_binary(Str);
@@ -197,23 +204,26 @@ encode(uuid, UUID) ->
 
 encode(varchar, Str) when is_list(Str) ->
     list_to_binary(Str);
+
 encode(varchar, Bin) ->
     Bin;
 
-encode(varint, Varint) when 16#80 > Varint andalso Varint >= -16#80 ->
-    <<Varint:1/big-signed-unit:8>>;
-
-encode(varint, Varint) ->
-    <<Varint:2/big-signed-unit:8>>;
+encode(varint, Val) ->
+    ByteCount = count_bytes(Val, 0),
+    << Val:ByteCount/big-signed-integer-unit:8 >>;
 
 encode(timeuuid, UUID) ->
     <<UUID:16/binary>>;
 
+% encode({tuple, {int, text}}, {1, <<"text">>})
 encode({tuple, Types}, Tuple) ->
-    L = lists:zip(tuple_to_list(Types), tuple_to_list(Tuple)),
-    Encode = fun(Type, El) -> to_bytes(encode(Type, El)) end,
-    << <<(Encode(Type, El))/binary>> || {Type, El} <- L >>.
+    <<
+        <<(to_bytes(encode(element(Pos, Types), element(Pos, Tuple))))/binary>>
+        || Pos <- lists:seq(1, size(Types))
+    >>.
 
+
+%% @doc
 to_bytes(Bin) ->
     <<(size(Bin)):?INT, Bin/binary>>.
 
@@ -222,90 +232,122 @@ to_bytes(Bin) ->
 %% Decode
 %%------------------------------------------------------------------------------
 
-decode(Type, Bin) ->
-    decode(Type, size(Bin), Bin).
 
-decode(ascii, Size, Bin) ->
-    <<Ascii:Size/binary, Rest/binary>> = Bin, {Ascii, Rest};
+%% @doc
+decode(ascii, Bin) ->
+    Bin;
 
-decode(bigint, 8, <<Bigint:?LONG, Rest/binary>>) ->
-    {Bigint, Rest};
+decode(bigint, <<Bigint:?LONG>>) ->
+    Bigint;
 
-decode(blob, Size, Bin) ->
-    <<Blob:Size/binary, Rest/binary>> = Bin, {Blob, Rest};
+decode(blob, Bin) ->
+    Bin;
 
-decode(boolean, 1, <<0, Rest/binary>>) ->
-    {false, Rest};
+decode(boolean, <<0>>) ->
+    false;
 
-decode(boolean, 1, <<_, Rest/binary>>) ->
-    {true, Rest};
+decode(boolean, <<_>>) ->
+    true;
 
-decode(counter, 8, <<Counter:?LONG, Rest/binary>>) ->
-    {Counter, Rest};
+decode(counter, <<Counter:?LONG>>) ->
+    Counter;
 
-decode(decimal, Size, <<Scale:?INT, Bin/binary>>) ->
-    {Unscaled, Rest} = decode(varint, Size - 4, Bin),
-    {{Unscaled, Scale}, Rest};
+decode(decimal, <<Scale:?INT, Bin/binary>>) ->
+    Unscaled = decode(varint, Bin),
+    {Unscaled, Scale};
 
-decode(double, 8, <<Double:?DOUBLE, Rest/binary>>) ->
-    {Double, Rest};
+decode(double, <<Double:?DOUBLE>>) ->
+    Double;
 
-decode(float, 4, <<Float:?FLOAT, Rest/binary>>) ->
-    {Float, Rest};
+decode(float, <<Float:?FLOAT>>) ->
+    Float;
 
-decode(inet, 4, <<A, B, C, D, Rest/binary>>) ->
-    {{A, B, C, D}, Rest};
+decode(inet, <<A, B, C, D>>) ->
+    {A, B, C, D};
 
-decode(inet, 16, <<A:?SHORT, B:?SHORT, C:?SHORT, D:?SHORT,
-    E:?SHORT, F:?SHORT, G:?SHORT, H:?SHORT, Rest/binary>>) ->
-    {{A, B, C, D, E, F, G, H}, Rest};
+decode(inet, <<A:?SHORT, B:?SHORT, C:?SHORT, D:?SHORT, E:?SHORT, F:?SHORT, G:?SHORT, H:?SHORT>>) ->
+    {A, B, C, D, E, F, G, H};
 
-decode(int, 4, Bin) ->
-    <<Int:?INT, Rest/binary>> = Bin, {Int, Rest};
+decode(int, <<Int:?INT>>) ->
+    Int;
 
-decode({list, ElType}, Size, Bin) ->
-    <<ListBin:Size/binary, Rest/binary>> = Bin, <<_Len:?INT, ElsBin/binary>> = ListBin,
-    {[element(1, decode(ElType, ElSize, ElBin))
-        || <<ElSize:?INT, ElBin:ElSize/binary>> <= ElsBin], Rest};
+decode({list, Type}, <<_Len:?INT, Bin/binary>>) ->
+    [
+        decode(Type, TermBin)
+        || <<Size:?INT, TermBin:Size/binary>> <= Bin
+    ];
 
-decode({map, {KeyType, ValType}}, Size, Bin) ->
-    <<MapBin:Size/binary, Rest/binary>> = Bin, <<_Len:?INT, ElsBin/binary>> = MapBin,
-    List = [ {decode(KeyType, KeySize, KeyBin), decode(ValType, ValSize, ValBin)}
-        || << KeySize:?INT, KeyBin:KeySize/binary, ValSize:?INT, ValBin:ValSize/binary >> <= ElsBin ],
-    {[{Key, Val} || {{Key, _}, {Val, _}} <- List], Rest};
+decode({map, {KeyType, ValType}}, <<_Len:?INT, Bin/binary>>) ->
+    [
+        {decode(KeyType, KeyBin), decode(ValType, ValBin)}
+        ||
+        <<
+            KeySize:?INT,
+            KeyBin:KeySize/binary,
+            ValSize:?INT,
+            ValBin:ValSize/binary
+        >> <= Bin
+    ];
 
-decode({set,  ElType}, Size, Bin) ->
-    {List, Rest} = decode({list, ElType}, Size, Bin),
-    {ordsets:to_list(ordsets:from_list(List)), Rest};
+decode({set, Type}, Bin) ->
+    lists:usort(decode({list, Type}, Bin));
 
-decode(text, Size, Bin) ->
-    <<Text:Size/binary, Rest/binary>> = Bin, {Text, Rest};
+decode(text, Text) ->
+    Text;
 
-decode(timestamp, 8, <<TS:?LONG, Rest/binary>>) ->
-    {TS, Rest};
+decode(timestamp, <<TS:?LONG>>) ->
+    TS;
 
-decode(uuid, 16, <<UUID:16/binary, Rest/binary>>) ->
-    {UUID, Rest};
+decode(uuid, <<UUID:16/binary>>) ->
+    UUID;
 
-decode(varchar, Size, Bin) ->
-    <<Varchar:Size/binary, Rest/binary>> = Bin, {Varchar, Rest};
+decode(varchar, Bin) ->
+    Bin;
 
-decode(varint, 1, <<Varint:1/big-signed-unit:8, Rest/binary>>) ->
-    {Varint, Rest};
+decode(varint, Bin) ->
+    Size = byte_size(Bin),
+    <<VarInt:Size/big-signed-integer-unit:8>> = Bin,
+    VarInt;
 
-decode(varint, 2, <<Varint:2/big-signed-unit:8, Rest/binary>>) ->
-    {Varint, Rest};
+decode(timeuuid, <<UUID:16/binary>>) ->
+    UUID;
 
-decode(timeuuid, 16, <<UUID:16/binary, Rest/binary>>) ->
-    {UUID, Rest};
+decode({tuple, Types}, Bin) ->
+    Elements = [TermBin || <<Size:?INT, TermBin:Size/binary>> <= Bin],
+    {_, List} = lists:foldl(
+        fun(TermBin, {Pos, Acc}) ->
+            {Pos+1, [decode(element(Pos, Types), TermBin)|Acc]}
+        end,
+        {1, []},
+        Elements),
+    list_to_tuple(lists:reverse(List)).
 
-decode({tuple, ElTypes}, Size, Bin) ->
-    <<TupleBin:Size/binary, Rest/binary>> = Bin,
-    Elements = [{ElSize, ElBin} || <<ElSize:?INT, ElBin:ElSize/binary>> <= TupleBin],
-    List = [decode(ElType, ElSize, ElBin) || {ElType, {ElSize, ElBin}}
-        <- lists:zip(tuple_to_list(ElTypes), Elements)],
-    {list_to_tuple([El || {El, _} <- List]), Rest}.
 
+%% @doc
 from_bytes(<<Size:?INT, Bin:Size/binary, Rest/binary>>) ->
     {Bin, Rest}.
+
+
+%% @private
+%% From cqerl_datatypes.erl
+count_bytes(X, Acc) when X =< 127, X >=    0 -> Acc + 1;
+count_bytes(X, Acc) when X >  127, X <   256 -> Acc + 2;
+count_bytes(X, Acc) when X <  0,   X >= -128 -> Acc + 1;
+count_bytes(X, Acc) when X < -128, X >= -256 -> Acc + 2;
+count_bytes(X, Acc) -> count_bytes(X bsr 8, Acc + 1).
+
+
+%% @private
+test() ->
+    [1,2,3] = decode({list, counter}, encode({list, counter}, [1,2,3])),
+    [{1, <<"t1">>}, {2, <<"t2">>}] =
+        decode({map, {int, text}}, encode({map, {int, text}}, [{1, <<"t1">>}, {2, <<"t2">>}])),
+    [1,3,5] = decode({set, int}, encode({set, int}, [1, 5, 1, 3])),
+    1234567890 = decode(varint, encode(varint, 1234567890)),
+    {<<"t">>, 1, 2.0} =
+        decode({tuple, {text, int, float}}, encode({tuple, {text, int, float}}, {<<"t">>, 1, 2.0})),
+    ok.
+
+
+
 
