@@ -69,9 +69,13 @@ parse(Bin) when byte_size(Bin) >= 9 ->
                 opcode = OpCode,
                 length = Length
             },
-            <<Body:Length/binary, Rest2/binary>> = Rest,
-            Resp = parse_resp(Frame#ecql_frame{body = Body}),
-            {ok, Frame#ecql_frame{message = Resp}, Rest2};
+            case Rest of
+                <<Body:Length/binary, Rest2/binary>> ->
+                    Resp = parse_resp(Frame#ecql_frame{body = Body}),
+                    {ok, Frame#ecql_frame{message = Resp}, Rest2};
+                _ ->
+                    more
+            end;
         false ->
             more
     end;
