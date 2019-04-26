@@ -298,7 +298,7 @@ conn_init(NkPort) ->
         auth = auth_token(Opts),
         next_stream_id = rand:uniform(16#FF)
     },
-    ?LLOG(info, "new connection (~p)", [self()], State),
+    ?LLOG(debug, "new connection (~p)", [self()], State),
     ?DEBUG("debug system activated", [], State),
     {ok, State}.
 

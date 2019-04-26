@@ -158,13 +158,12 @@ query(SrvId, Query, Values, Level, Tries) when is_atom(SrvId), Tries > 0 ->
         {ok, Pid, _} ->
             query({SrvId, Pid}, Query, Values, Level, Tries);
         {error, Error} when Tries > 1 ->
-            ?LLOG(error, "error in get_connection: ~p, retrying", [Query, Error]),
+            ?LLOG(notice, "error in get_connection: ~p, retrying", [Error]),
             timer:sleep(1000),
             query(SrvId, Query, Values, Level, Tries-1);
         {error, Error} ->
             {error, Error}
     end;
-
 
 query(_SrvId, _Query, _Values, _Level, _Tries) ->
     {error, too_many_tries}.
