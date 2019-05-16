@@ -60,7 +60,7 @@
 
 -define(SYNC_CALL_TIMEOUT, 3*5*1000).
 -define(TIMEOUT, 180000).
--define(OP_TIMEOUT, 3000).
+-define(OP_TIMEOUT, 30000).
 
 -define(PASSWORD_AUTHENTICATOR, <<"org.apache.cassandra.auth.PasswordAuthenticator">>).
 
