@@ -22,7 +22,7 @@
 
 -module(nkcassandra).
 -author('Carlos Gonzalez <carlosj.gf@gmail.com>').
--export([query/2, query/3, query/4, options/1]).
+-export([query/2, query/3, options/1]).
 
 
 -define(LLOG(Type, Txt, Args),
@@ -74,35 +74,69 @@
     local_one.
 
 
+-type query_opts() ::
+    #{
+        values => [value()] | undefined,
+        consistency => consistency(),
+        span_op => binary(),                % If defined, creates a new span
+        span_tags => map()
+    }.
+
+
 %% ===================================================================
 %% Types
 %% ===================================================================
 
+
 %% @doc
 -spec query(nkserver:id() | {nkserver:id(), pid()}, iolist()|string()) ->
-    ok | {ok, nkcassandra_protocol:cql_result()} |
+    ok | {ok, binary(), list(), list()} |
     {error, nkcassandra_protocol:error()|term()}.
 
 query(Id, Query) ->
-    query(Id, Query, undefined, one).
+    query(Id, Query, #{}).
 
 
 %% @doc
--spec query(nkserver:id() | {nkserver:id(), pid()}, iolist()|string(), [value()]) ->
+-spec query(nkserver:id() | {nkserver:id(), pid()}, iolist()|string(), query_opts()) ->
     ok | {ok, binary(), list(), list()} |
     {error, nkcassandra_protocol:error()|term()}.
 
-query(Id, Query, Values) ->
-    query(Id, Query, Values, one).
+query(Id, Query, Opts) ->
+    Values = maps:get(values, Opts, undefined),
+    Level = maps:get(level, Opts, one),
+    Span = case Opts of
+        #{span_op:=Op} ->
+            S0 = nkserver_ot:span(Id, Op),
+            S1 = nkserver_ot:tag(S0, <<"cassandra.sql">>, Query),
+            case Opts of
+                #{span_tags:=Tags} ->
+                    nkserver_ot:tags(S1, Tags);
+                _ ->
+                    S1
+            end;
+        _ ->
+            undefined
+    end,
+    Result = query(Id, Query, Values, Level, 2),
+    case Span of
+        undefined ->
+            ok;
+        _ ->
+            Span2 = case Result of
+                ok ->
+                    nkserver_ot:log(Span, <<"result OK">>);
+                {ok, _} ->
+                    nkserver_ot:log(Span, <<"result OK (data)">>);
+                {error, Error} ->
+                    S2 = nkserver_ot:log(Span, {"result ERROR: ~p", [Error]}),
+                    nkserver_ot:tag_error(S2, Error)
+            end,
+            nkserver_ot:finish(Span2)
+    end,
+    Result.
 
 
-%% @doc
--spec query(nkserver:id() | {nkserver:id(), pid()}, iolist()|string(), [value()], consistency()) ->
-    ok | {ok, binary(), list(), list()} |
-    {error, nkcassandra_protocol:error()|term()}.
-
-query(Id, Query, Values, Level) ->
-    query(Id, Query, Values, Level, 2).
 
 
 %% @doc
