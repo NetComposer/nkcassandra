@@ -47,7 +47,7 @@ plugin_deps() ->
 %% As url can use:
 %% "cassandra://[user:pass@]host[:port][;transport=tcp|tls]
 %% "tcp|tls://[user:pass@]host[:port]
-plugin_config(_SrvId, Config, #{class:=?PACKAGE_CLASS_CASSANDRA}) ->
+plugin_config(_SrvId, Config, #{class:=nkcassandra}) ->
     Syntax = #{
         targets => {list, #{
             url => binary,                  % Can use tcp, tls, user, password

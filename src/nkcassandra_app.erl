@@ -60,7 +60,6 @@ start(_Type, _Args) ->
             {ok, Vsn} = application:get_key(?APP, vsn),
             lager:info("NkCASSANDRA v~s is starting", [Vsn]),
             {ok, Pid} = nkcassandra_sup:start_link(),
-            nkserver_util:register_package_class(?PACKAGE_CLASS_CASSANDRA, nkcassandra),
             {ok, Pid};
         {error, Error} ->
             lager:error("Error parsing config: ~p", [Error]),
